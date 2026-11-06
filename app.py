@@ -92,7 +92,7 @@ def infer_image(image_bytes: bytes, confidence: float, iou: float):
         conf=confidence,
         iou=iou,
         max_det=MAX_DETECTIONS,
-        device="cpu",
+        device=0,
         verbose=False
     )[0]
 
