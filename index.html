@@ -200,7 +200,7 @@ async function pollEsp() {
     const response = await fetch("./latest", { cache: "no-store" });
     const data = await response.json();
     if (!data.id) { if (!espSeen) hint("Waiting for the ESP32…"); return; }
-    const online = data.age_s < 5;
+    const online = data.age_s < 70;
     if (online !== espOnline) {
       espOnline = online;
       if (!online && espSeen) {
