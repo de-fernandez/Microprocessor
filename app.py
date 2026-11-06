@@ -49,7 +49,7 @@ latest_frame = None
 latest_result = None
 latest_id = 0
 latest_timestamp = None
-event_log = deque(maxlen=300)
+event_log = deque(maxlen=20)
 
 
 def infer_image(image_bytes: bytes, confidence: float, iou: float) -> tuple[dict, bytes]:
