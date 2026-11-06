@@ -92,7 +92,7 @@ def infer_image(image_bytes: bytes, confidence: float, iou: float):
         conf=confidence,
         iou=iou,
         max_det=MAX_DETECTIONS,
-        device=0,
+        device=0 if torch.cuda.is_available() else "cpu",
         verbose=False
     )[0]
 
