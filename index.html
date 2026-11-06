@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InZpector!</title>
+<style>
+  :root { --bg: #e9ebee; --app: #f6f7f9; --card: #fff; --text: #16191d; --muted: #6b7480; --line: #e3e6ea; --good: #16a34a; --bad: #dc2626; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #050607; --app: #0f1113; --card: #181b1f; --text: #eceff2; --muted: #8b95a1; --line: #2a2f35; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; justify-content: center; align-items: center; }
+  .wrap { width: 100%; max-width: 430px; min-height: 100dvh; background: var(--app); display: flex; flex-direction: column; gap: 12px; padding: max(16px, env(safe-area-inset-top)) 14px max(16px, env(safe-area-inset-bottom)); }
+  @media (min-width: 520px) {
+    .wrap { min-height: 0; height: min(880px, calc(100dvh - 40px)); border-radius: 36px; box-shadow: 0 20px 60px rgba(0,0,0,.25), 0 0 0 10px #1b1d20; overflow-y: auto; }
+  }
+  h1 { font-size: 30px; font-weight: 800; margin: 4px 0 0; text-align: center; letter-spacing: -0.01em; }
+  .feed { width: 100%; aspect-ratio: 3 / 4; background: #000; border-radius: 20px; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; }
+  .frame { position: relative; max-width: 100%; max-height: 100%; }
+  .frame video, .frame img { display: block; max-width: 100%; max-height: 100%; }
+  .frame canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .hint { position: absolute; color: #aab2bd; font-size: 14px; text-align: center; padding: 20px; }
+  .status { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: stretch; background: var(--card); border: 2px solid var(--line); border-radius: 18px; padding: 12px; transition: border-color .2s; }
+  .status.good { border-color: var(--good); } .status.bad { border-color: var(--bad); }
+  .status-left { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; }
+  .status .label { font-size: 16px; font-weight: 800; letter-spacing: .14em; color: var(--text); }
+  .status .value { background: #0b0d0c; border-radius: 10px; padding: 10px; color: #6b7280; box-shadow: inset 0 0 0 2px #1d2220, inset 0 4px 14px rgba(0,0,0,.6); }
+  .status .value svg { display: block; width: 118px; height: auto; }
+  .status .value .on { fill: currentColor; filter: drop-shadow(0 0 3px currentColor); }
+  .status .value .off { fill: currentColor; opacity: .08; }
+  .status.good .value { color: #22e36b; } .status.bad .value { color: #ff3b30; }
+  .serial { display: flex; flex-direction: column; text-align: left; border-radius: 10px; overflow: hidden; border: 1px solid #1d2220; background: #0b0d0c; min-width: 0; }
+  .serial-head { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: #151917; color: #9aa59f; font-size: 11px; font-family: ui-monospace, Consolas, monospace; }
+  .serial-head button { background: none; border: 1px solid #2c332f; color: #9aa59f; border-radius: 6px; padding: 1px 7px; font-size: 10px; cursor: pointer; }
+  .serial pre { margin: 0; height: 118px; overflow-y: auto; padding: 6px 8px; font: 11px/1.45 ui-monospace, Consolas, "Courier New", monospace; color: #c9d1cc; white-space: pre-wrap; word-break: break-word; }
+  .serial .t { color: #5f6b65; } .serial .good { color: #22e36b; } .serial .bad { color: #ff4d42; } .serial .info { color: #e0b341; }
+  .linkbtn { align-self: center; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 6px 14px; font-size: 12px; cursor: pointer; }
+  .meta { text-align: center; font-size: 12px; color: var(--muted); min-height: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>InZpector!</h1>
+  <div class="feed">
+    <div class="frame">
+      <video id="video" playsinline muted hidden></video>
+      <img id="espimg" alt="" hidden>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="hint" id="hint">Starting camera…</div>
+  </div>
+  <div class="status" id="status">
+    <div class="status-left">
+      <div class="label">STATUS</div>
+      <div class="value" id="value"></div>
+    </div>
+    <div class="serial">
+      <div class="serial-head"><span>Serial Monitor</span><button id="clr">Clear</button></div>
+      <pre id="serial"></pre>
+    </div>
+  </div>
+  <div class="meta" id="meta"></div>
+  <button class="linkbtn" id="camBtn">Test with laptop webcam</button>
+</div>
+<script>
+const CONF = 0.4;
+const SEND_WIDTH = 640;
+const $ = (id) => document.getElementById(id);
+const video = $("video"), espimg = $("espimg"), overlay = $("overlay"), ctx = overlay.getContext("2d");
+let mode = "esp", running = false, stream = null, espTimer = null, lastId = 0;
+const isGood = (name) => name.toLowerCase().includes("good");
+
+const SEG_SHAPES = {
+  a: "10,8 15,3 45,3 50,8 45,13 15,13",
+  g: "10,50 15,45 45,45 50,50 45,55 15,55",
+  d: "10,92 15,87 45,87 50,92 45,97 15,97",
+  f: "8,10 13,15 13,43 8,48 3,43 3,15",
+  b: "52,10 57,15 57,43 52,48 47,43 47,15",
+  e: "8,52 13,57 13,85 8,90 3,85 3,57",
+  c: "52,52 57,57 57,85 52,90 47,85 47,57",
+};
+const GLYPHS = { G: "acdef", O: "abcdef", S: "acdfg", t: "defg", U: "bcdef", d: "bcdeg", b: "cdefg", A: "abcefg", "-": "g", " ": "" };
+function sevenSeg(text, digits = 4) {
+  const chars = text.padStart(digits, " ").slice(-digits).split("");
+  const width = 70;
+  let svg = `<svg viewBox="-4 0 ${digits * width} 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><g transform="skewX(-6) translate(8 0)">`;
+  chars.forEach((character, index) => {
+    const lit = GLYPHS[character] ?? "";
+    svg += `<g transform="translate(${index * width} 0)">`;
+    for (const [segment, points] of Object.entries(SEG_SHAPES)) {
+      svg += `<polygon points="${points}" class="${lit.includes(segment) ? "on" : "off"}"/>`;
+    }
+    svg += "</g>";
+  });
+  return svg + "</g></svg>";
+}
+const DISPLAY_TEXT = { GOOD: "GOOd", BAD: "bAd" };
+
+function setStatus(text, className = "") {
+  $("value").innerHTML = sevenSeg(DISPLAY_TEXT[text] || "----");
+  $("value").setAttribute("aria-label", text);
+  $("status").className = "status " + className;
+}
+function meta(text) { $("meta").textContent = text || ""; }
+const MAX_LINES = 200;
+let lastLogged = "";
+function log(text, className = "") {
+  const element = $("serial");
+  const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 20;
+  const line = document.createElement("div");
+  const timestamp = new Date().toLocaleTimeString([], { hour12: false });
+  line.innerHTML = `<span class="t">${timestamp}</span> <span class="${className}"></span>`;
+  line.lastChild.textContent = text;
+  element.appendChild(line);
+  while (element.childElementCount > MAX_LINES) element.firstChild.remove();
+  if (atBottom) element.scrollTop = element.scrollHeight;
+}
+function logOnce(text, className) {
+  if (text !== lastLogged) { log(text, className); lastLogged = text; }
+}
+function hint(text) { $("hint").textContent = text || ""; $("hint").hidden = !text; }
+
+function render(data, doLog = true) {
+  overlay.width = data.width;
+  overlay.height = data.height;
+  ctx.clearRect(0, 0, data.width, data.height);
+  ctx.lineWidth = Math.max(2, data.width / 300);
+  let bad = 0, good = 0;
+  for (const box of data.boxes) {
+    const okay = isGood(box.class);
+    okay ? good++ : bad++;
+    ctx.strokeStyle = okay ? "#16a34a" : "#dc2626";
+    ctx.strokeRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
+  }
+  if (bad) setStatus("BAD", "bad");
+  else if (good) setStatus("GOOD", "good");
+  else setStatus("No joint detected");
+
+  if (doLog) {
+    const word = bad ? "BAD " : good ? "GOOD" : "----";
+    log(`${word} G:${good} B:${bad} ${Math.round(data.inference_ms)}ms`, bad ? "bad" : good ? "good" : "");
+    lastLogged = "";
+  }
+}
+
+async function startCam() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 960 }, facingMode: "environment" },
+      audio: false
+    });
+  } catch (error) {
+    hint("Camera blocked. Allow camera access and try again.");
+    log("ERROR: camera blocked", "bad");
+    return;
+  }
+  video.srcObject = stream;
+  await video.play();
+  video.hidden = false;
+  hint("");
+  running = true;
+  log(`Webcam started (${video.videoWidth}x${video.videoHeight})`, "info");
+  loopCam();
+}
+function stopCam() {
+  running = false;
+  if (stream) stream.getTracks().forEach((track) => track.stop());
+  stream = null;
+  video.hidden = true;
+}
+async function loopCam() {
+  const grab = document.createElement("canvas");
+  while (running && mode === "cam") {
+    if (!video.videoWidth) { await new Promise((resolve) => setTimeout(resolve, 100)); continue; }
+    const scale = Math.min(1, SEND_WIDTH / video.videoWidth);
+    grab.width = Math.round(video.videoWidth * scale);
+    grab.height = Math.round(video.videoHeight * scale);
+    grab.getContext("2d").drawImage(video, 0, 0, grab.width, grab.height);
+    const blob = await new Promise((resolve) => grab.toBlob(resolve, "image/jpeg", 0.8));
+    try {
+      const response = await fetch(`./predict?conf=${CONF}`, {
+        method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob
+      });
+      if (!response.ok) throw new Error(`Server error ${response.status}`);
+      const data = await response.json();
+      if (running && mode === "cam") render(data);
+    } catch (error) {
+      logOnce("ERROR: " + error.message, "bad");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+}
+
+let loadingImg = false, lastEventId = 0, espSeen = false, espIp = null, espOnline = false;
+async function pollEsp() {
+  if (loadingImg) return;
+  try {
+    const response = await fetch("./latest", { cache: "no-store" });
+    const data = await response.json();
+    if (!data.id) { if (!espSeen) hint("Waiting for the ESP32…"); return; }
+    const online = data.age_s < 5;
+    if (online !== espOnline) {
+      espOnline = online;
+      if (!online && espSeen) {
+        log("ESP32 offline (no frames)", "bad");
+        setStatus("—");
+        meta("ESP32 offline");
+      }
+    }
+    if (data.id !== lastId) {
+      lastId = data.id;
+      loadingImg = true;
+      espimg.onload = () => {
+        loadingImg = false;
+        espimg.hidden = false;
+        hint("");
+        render(data.result, false);
+      };
+      espimg.onerror = () => { loadingImg = false; };
+      espimg.src = `./latest.jpg?id=${data.id}`;
+    }
+  } catch (error) {
+    logOnce("ERROR: server not reachable", "bad");
+  }
+}
+async function pollEvents() {
+  if (mode !== "esp") return;
+  try {
+    const response = await fetch(`./events?after=${lastEventId}`, { cache: "no-store" });
+    const { events } = await response.json();
+    for (const event of events) {
+      lastEventId = event.id;
+      const device = event.device || {};
+      if (!espSeen || (device.ip && device.ip !== espIp)) {
+        espSeen = true;
+        espIp = device.ip || espIp;
+        log(`ESP32 connected${device.ip ? " (" + device.ip + ")" : ""}`, "info");
+      }
+      let good = 0, bad = 0;
+      for (const [name, count] of Object.entries(event.counts)) {
+        isGood(name) ? (good += count) : (bad += count);
+      }
+      const word = bad ? "BAD " : good ? "GOOD" : "----";
+      const parts = [`#${device.frame ?? event.id}`, word, `G:${good} B:${bad}`, `${Math.round(event.inference_ms)}ms`];
+      if (device.rssi) parts.push(`${device.rssi}dBm`);
+      log(parts.join(" "), bad ? "bad" : good ? "good" : "");
+      if (device.ip) meta(`ESP32 ${device.ip} · signal ${device.rssi ?? "?"} dBm · upload ${device.upload_ms ?? "?"} ms`);
+    }
+  } catch (error) {
+    // The main polling function reports connection errors.
+  }
+}
+let evTimer = null;
+function setMode(newMode) {
+  mode = newMode;
+  setStatus("—");
+  meta("");
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  clearInterval(espTimer);
+  clearInterval(evTimer);
+  if (newMode === "esp") {
+    stopCam();
+    lastId = 0;
+    espimg.hidden = true;
+    hint("Waiting for the ESP32…");
+    $("camBtn").textContent = "Test with laptop webcam";
+    pollEsp();
+    espTimer = setInterval(pollEsp, 150);
+    pollEvents();
+    evTimer = setInterval(pollEvents, 400);
+  } else {
+    espimg.hidden = true;
+    hint("Starting webcam…");
+    $("camBtn").textContent = "Back to ESP32 camera";
+    log("Switched to laptop webcam", "info");
+    startCam();
+  }
+}
+$("clr").onclick = () => { $("serial").innerHTML = ""; lastLogged = ""; };
+$("camBtn").onclick = () => setMode(mode === "esp" ? "cam" : "esp");
+log("InZpector! ready", "info");
+fetch("./events?after=0", { cache: "no-store" })
+  .then((response) => response.json())
+  .then(({ events }) => { if (events.length) lastEventId = events[events.length - 1].id; })
+  .catch(() => {})
+  .finally(() => setMode("esp"));
+</script>
+</body>
+</html>
