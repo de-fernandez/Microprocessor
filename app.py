@@ -3,9 +3,9 @@
 Unified Solder Joint Detection System
 Optimized for low-memory Render deployment.
 
-- YOLO11n inference at 320 image size
+- YOLO11n inference at 256 image size
 - Single inference request at a time
-- Maximum 20 detection events
+- Maximum 10 detections per image
 - Browser webcam and ESP32 JPEG uploads
 """
 
@@ -31,6 +31,7 @@ from ultralytics import YOLO
 
 # Limit PyTorch CPU threads.
 torch.set_num_threads(1)
+
 try:
     torch.set_num_interop_threads(1)
 except RuntimeError:
@@ -42,8 +43,11 @@ MODEL_PATH = Path(os.getenv("MODEL_PATH", str(BASE_DIR / "weights.pt")))
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 DEFAULT_CONFIDENCE = 0.40
 DEFAULT_IOU = 0.50
-INFERENCE_SIZE = 320
-MAX_DETECTIONS = 20
+
+# Inference optimization
+INFERENCE_SIZE = 256
+MAX_DETECTIONS = 10
+JPEG_QUALITY = 70
 
 if not MODEL_PATH.exists():
     raise RuntimeError(f"YOLO weights not found: {MODEL_PATH}")
@@ -55,7 +59,7 @@ MODEL_NAMES = model.names
 # Only one inference request can run at a time.
 inference_lock = threading.Lock()
 
-app = FastAPI(title="Solder Joint Detection System", version="1.1.0")
+app = FastAPI(title="Solder Joint Detection System", version="1.2.0")
 
 latest_lock = threading.Lock()
 
@@ -82,7 +86,6 @@ def infer_image(image_bytes: bytes, confidence: float, iou: float):
     height, width = frame.shape[:2]
     started = time.perf_counter()
 
-    # Run YOLO11n with reduced inference size.
     prediction = model.predict(
         source=frame,
         imgsz=INFERENCE_SIZE,
@@ -101,7 +104,7 @@ def infer_image(image_bytes: bytes, confidence: float, iou: float):
 
     boxes_json = []
 
-    # Draw directly on the decoded frame to avoid another full image copy.
+    # Draw directly on the decoded frame.
     annotated = frame
 
     if prediction.boxes is not None:
@@ -120,7 +123,6 @@ def infer_image(image_bytes: bytes, confidence: float, iou: float):
             counts[class_name] = counts.get(class_name, 0) + 1
 
             is_good = "good" in class_name.lower()
-
             color = (50, 190, 80) if is_good else (40, 40, 230)
 
             cv2.rectangle(
@@ -182,7 +184,7 @@ def infer_image(image_bytes: bytes, confidence: float, iou: float):
     ok, encoded = cv2.imencode(
         ".jpg",
         annotated,
-        [cv2.IMWRITE_JPEG_QUALITY, 80]
+        [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
     )
 
     annotated_jpeg = encoded.tobytes() if ok else image_bytes
@@ -223,7 +225,7 @@ async def predict(
     global latest_frame, latest_result
     global latest_id, latest_timestamp
 
-    # Reject overlapping requests instead of allowing them to queue.
+    # Prevent overlapping inference requests.
     if not inference_lock.acquire(blocking=False):
         raise HTTPException(
             status_code=429,
@@ -341,12 +343,10 @@ def get_events(after: int = 0):
 if __name__ == "__main__":
     import uvicorn
     import webbrowser
-    import threading
 
     url = "http://localhost:8000/"
 
     def open_browser():
-        import time
         time.sleep(2)
         webbrowser.open(url)
 
